@@ -29,6 +29,7 @@ class DecoderState(Enum):
     PARAMETER_COLON = "parameter_colon"
     PARAMETER_VALUE_OPEN = "parameter_value_open"
     PARAMETER_STRING_VALUE = "parameter_string_value"
+    PARAMETER_NUMBER_VALUE = "parameter_number_value"
     PARAMETER_VALUE_CLOSE = "parameter_value_close"
     PARAMETER_COMMA = "parameter_comma"
     PARAMETER_COMPLETE = "parameter_complete"
@@ -59,6 +60,50 @@ def is_valid_prefix(candidate: str, target: str) -> bool:
         True if the target starts with the candidate, otherwise False.
     """
     return target.startswith(candidate)
+
+
+def is_a_valid_number(value: str) -> bool:
+    """
+    Check whether a string represents a valid simple JSON number.
+
+    Args:
+        value: String representation of the number to validate.
+
+    Returns:
+        True if the value is a valid integer or decimal number,
+        otherwise False.
+    """
+    # Exponential notation is not supported yet.
+    if not value:
+        return False
+    has_decimal_point = False
+    start_index = 1 if value[0] == "-" else 0
+    if start_index < len(value):
+        if value[start_index] == "0":
+            if start_index == len(value) - 1:
+                return True
+            if value[start_index + 1] != ".":
+                return False
+    for index, char in enumerate(value):
+        if index == 0 and char == "-":
+            if len(value) == 1:
+                return False
+            continue
+        if index > 0 and char == "-":
+            return False
+        if (
+            (index == start_index and char == ".") or
+            (index == len(value) - 1 and char == ".")
+        ):
+            return False
+        if char == "." and not has_decimal_point:
+            has_decimal_point = True
+        elif has_decimal_point and char == ".":
+            return False
+        elif char not in "0123456789":
+            return False
+        continue
+    return True
 
 
 def check_candidates(
@@ -189,12 +234,34 @@ def next_state(
     elif current_state == DecoderState.PARAMETER_COLON and char == '"':
         if context.current_parameter_type == "string":
             return DecoderState.PARAMETER_VALUE_OPEN
-    elif current_state == DecoderState.PARAMETER_VALUE_OPEN and char != '"':
-        return DecoderState.PARAMETER_STRING_VALUE
-    elif current_state == DecoderState.PARAMETER_STRING_VALUE and char!= '"':
+    elif (
+        current_state == DecoderState.PARAMETER_COLON and
+        char in '-0123456789'
+    ):
+        if context.current_parameter_type == "number":
+            return DecoderState.PARAMETER_NUMBER_VALUE
+    elif current_state == DecoderState.PARAMETER_VALUE_OPEN:
+        if char != '"':
+            return DecoderState.PARAMETER_STRING_VALUE
+        elif char == '"':
+            return DecoderState.PARAMETER_VALUE_CLOSE
+    elif current_state == DecoderState.PARAMETER_STRING_VALUE and char != '"':
         return DecoderState.PARAMETER_STRING_VALUE
     elif current_state == DecoderState.PARAMETER_STRING_VALUE and char == '"':
         return DecoderState.PARAMETER_VALUE_CLOSE
+    elif current_state == DecoderState.PARAMETER_NUMBER_VALUE:
+        if char in '0123456789':
+            return DecoderState.PARAMETER_NUMBER_VALUE
+        elif char == "." and "." not in context.parameter_value_buffer:
+            return DecoderState.PARAMETER_NUMBER_VALUE
+        elif char == ",":
+            if is_a_valid_number(context.parameter_value_buffer):
+                return DecoderState.PARAMETER_COMMA
+            return DecoderState.INVALID
+        elif char == "}":
+            if is_a_valid_number(context.parameter_value_buffer):
+                return DecoderState.PARAMETER_COMPLETE
+            return DecoderState.INVALID
     elif current_state == DecoderState.PARAMETER_VALUE_CLOSE:
         if char == ',':
             return DecoderState.PARAMETER_COMMA
@@ -241,8 +308,11 @@ def update_context(
         )
     if new_state == DecoderState.PARAMETER_STRING_VALUE:
         context.parameter_value_buffer += char
+    if new_state == DecoderState.PARAMETER_NUMBER_VALUE:
+        context.parameter_value_buffer += char
     if new_state == DecoderState.PARAMETER_COMMA:
         context.parameter_name_buffer = ""
         context.parameter_value_buffer = ""
         context.current_parameter_type = ""
+    
     return context
