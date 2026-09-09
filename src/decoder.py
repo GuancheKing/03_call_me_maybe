@@ -25,6 +25,13 @@ class DecoderState(Enum):
     PARAMETERS_OPEN = "parameters_open"
     PARAMETER_NAME = "parameter_name"
     PARAMETER_KEY_OPEN = "parameter_key_open"
+    PARAMETER_KEY_CLOSE = "parameter_key_close"
+    PARAMETER_COLON = "parameter_colon"
+    PARAMETER_VALUE_OPEN = "parameter_value_open"
+    PARAMETER_STRING_VALUE = "parameter_string_value"
+    PARAMETER_VALUE_CLOSE = "parameter_value_close"
+    PARAMETER_COMMA = "parameter_comma"
+    PARAMETER_COMPLETE = "parameter_complete"
     COMPLETE = "complete"
     INVALID = "invalid"
 
@@ -36,6 +43,8 @@ class DecoderContext(BaseModel):
     function_name_buffer: str = ""
     parameter_name_buffer: str = ""
     parameter_names: list[str] = []
+    current_parameter_type: str = ""
+    parameter_value_buffer: str = ""
 
 
 def is_valid_prefix(candidate: str, target: str) -> bool:
@@ -151,6 +160,50 @@ def next_state(
         return DecoderState.KEY_OPEN
     elif current_state == DecoderState.PARAMETERS_OPEN and char == '"':
         return DecoderState.PARAMETER_KEY_OPEN
+    elif current_state == DecoderState.PARAMETER_KEY_OPEN:
+        candidate = context.parameter_name_buffer + char
+        status = check_candidates(candidate, context.parameter_names)
+        if status == CandidateStatus.INVALID:
+            return DecoderState.INVALID
+        return DecoderState.PARAMETER_NAME
+    elif current_state == DecoderState.PARAMETER_NAME:
+        if (
+            char == '"'
+            and check_candidates(
+                context.parameter_name_buffer,
+                context.parameter_names
+            ) == CandidateStatus.VALID_COMPLETE
+        ):
+            return DecoderState.PARAMETER_KEY_CLOSE
+
+        candidate = context.parameter_name_buffer + char
+        status = check_candidates(
+            candidate,
+            context.parameter_names
+        )
+
+        if status != CandidateStatus.INVALID:
+            return DecoderState.PARAMETER_NAME
+    elif current_state == DecoderState.PARAMETER_KEY_CLOSE and char == ':':
+        return DecoderState.PARAMETER_COLON
+    elif current_state == DecoderState.PARAMETER_COLON and char == '"':
+        if context.current_parameter_type == "string":
+            return DecoderState.PARAMETER_VALUE_OPEN
+    elif current_state == DecoderState.PARAMETER_VALUE_OPEN and char != '"':
+        return DecoderState.PARAMETER_STRING_VALUE
+    elif current_state == DecoderState.PARAMETER_STRING_VALUE and char!= '"':
+        return DecoderState.PARAMETER_STRING_VALUE
+    elif current_state == DecoderState.PARAMETER_STRING_VALUE and char == '"':
+        return DecoderState.PARAMETER_VALUE_CLOSE
+    elif current_state == DecoderState.PARAMETER_VALUE_CLOSE:
+        if char == ',':
+            return DecoderState.PARAMETER_COMMA
+        elif char == '}':
+            return DecoderState.PARAMETER_COMPLETE
+    elif current_state == DecoderState.PARAMETER_COMMA and char == '"':
+        return DecoderState.PARAMETER_KEY_OPEN
+    elif current_state == DecoderState.PARAMETER_COMPLETE and char == '}':
+        return DecoderState.COMPLETE
     return DecoderState.INVALID
 
 
@@ -176,5 +229,20 @@ def update_context(
             function_definitions
         )
         context.parameter_names = list(parameters.keys())
-
+    if new_state == DecoderState.PARAMETER_NAME:
+        context.parameter_name_buffer += char
+    if new_state == DecoderState.PARAMETER_COLON:
+        parameters = get_function_parameters(
+            context.function_name_buffer,
+            function_definitions
+        )
+        context.current_parameter_type = (
+            parameters[context.parameter_name_buffer].type
+        )
+    if new_state == DecoderState.PARAMETER_STRING_VALUE:
+        context.parameter_value_buffer += char
+    if new_state == DecoderState.PARAMETER_COMMA:
+        context.parameter_name_buffer = ""
+        context.parameter_value_buffer = ""
+        context.current_parameter_type = ""
     return context
