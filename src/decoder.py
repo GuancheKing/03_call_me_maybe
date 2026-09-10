@@ -11,6 +11,7 @@ class CandidateStatus(Enum):
 
 
 class DecoderState(Enum):
+    """Represent the possible states of the constrained decoder."""
     START = "start"
     OBJECT_OPEN = "object_open"
     KEY_OPEN = "key_open"
@@ -30,6 +31,7 @@ class DecoderState(Enum):
     PARAMETER_VALUE_OPEN = "parameter_value_open"
     PARAMETER_STRING_VALUE = "parameter_string_value"
     PARAMETER_NUMBER_VALUE = "parameter_number_value"
+    PARAMETER_BOOLEAN_VALUE = "parameter_boolean_value"
     PARAMETER_VALUE_CLOSE = "parameter_value_close"
     PARAMETER_COMMA = "parameter_comma"
     PARAMETER_COMPLETE = "parameter_complete"
@@ -38,6 +40,7 @@ class DecoderState(Enum):
 
 
 class DecoderContext(BaseModel):
+    """Store the current state and buffers used during decoding."""
     state: DecoderState
     expected_key: str = "name"
     key_buffer: str = ""
@@ -114,8 +117,8 @@ def check_candidates(
     Validate a candidate against a list of allowed names.
 
     Args:
-        candidate: Generated name or partial name.
-        allowed_names: List of valid function names.
+        candidate: Generated value or partial value to validate.
+        allowed_names: List of valid names or values.
 
     Returns:
         The validation status of the candidate.
@@ -150,6 +153,18 @@ def next_state(
     context: DecoderContext,
     allowed_names: list[str]
 ) -> DecoderState:
+    """
+    Determine the next decoder state for a generated character.
+
+    Args:
+        current_state: Current decoder state.
+        char: Character to validate.
+        context: Current decoding context.
+        allowed_names: Function names available for generation.
+
+    Returns:
+        The next decoder state, or INVALID if the character is not allowed.
+    """
     if current_state == DecoderState.START and char == "{":
         return DecoderState.OBJECT_OPEN
     elif current_state == DecoderState.OBJECT_OPEN and char == '"':
@@ -206,6 +221,9 @@ def next_state(
         return DecoderState.KEY_OPEN
     elif current_state == DecoderState.PARAMETERS_OPEN and char == '"':
         return DecoderState.PARAMETER_KEY_OPEN
+    elif current_state == DecoderState.PARAMETERS_OPEN and char == '}':
+        if not context.parameter_names:
+            return DecoderState.PARAMETER_COMPLETE
     elif current_state == DecoderState.PARAMETER_KEY_OPEN:
         candidate = context.parameter_name_buffer + char
         available_parameter_names = [
@@ -248,11 +266,18 @@ def next_state(
     ):
         if context.current_parameter_type == "number":
             return DecoderState.PARAMETER_NUMBER_VALUE
+    elif (
+        current_state == DecoderState.PARAMETER_COLON and
+        context.current_parameter_type == "boolean" and
+        char in ("t", "f")
+    ):
+        return DecoderState.PARAMETER_BOOLEAN_VALUE
     elif current_state == DecoderState.PARAMETER_VALUE_OPEN:
         if char != '"':
             return DecoderState.PARAMETER_STRING_VALUE
         elif char == '"':
             return DecoderState.PARAMETER_VALUE_CLOSE
+    # TODO: Handle escaped characters in JSON strings.
     elif current_state == DecoderState.PARAMETER_STRING_VALUE and char != '"':
         return DecoderState.PARAMETER_STRING_VALUE
     elif current_state == DecoderState.PARAMETER_STRING_VALUE and char == '"':
@@ -282,6 +307,34 @@ def next_state(
                         return DecoderState.INVALID
                 return DecoderState.PARAMETER_COMPLETE
             return DecoderState.INVALID
+    elif current_state == DecoderState.PARAMETER_BOOLEAN_VALUE:
+        if (
+            char == "," and
+            check_candidates(
+                context.parameter_value_buffer,
+                ["true", "false"]
+            ) == CandidateStatus.VALID_COMPLETE
+        ):
+            return DecoderState.PARAMETER_COMMA
+        if (
+            char == "}" and
+                check_candidates(
+                    context.parameter_value_buffer,
+                    ["true", "false"]
+                ) == CandidateStatus.VALID_COMPLETE
+        ):
+            completed_parameter_names = (
+                context.used_parameter_names
+                + [context.parameter_name_buffer]
+            )
+            for name in context.parameter_names:
+                if name not in completed_parameter_names:
+                    return DecoderState.INVALID
+            return DecoderState.PARAMETER_COMPLETE
+        candidate = context.parameter_value_buffer + char
+        status = check_candidates(candidate, ["true", "false"])
+        if status != CandidateStatus.INVALID:
+            return DecoderState.PARAMETER_BOOLEAN_VALUE
     elif current_state == DecoderState.PARAMETER_VALUE_CLOSE:
         if char == ',':
             return DecoderState.PARAMETER_COMMA
@@ -307,6 +360,18 @@ def update_context(
         allowed_names: list[str],
         function_definitions: list[FunctionDefinition]
 ) -> DecoderContext:
+    """
+    Update the decoder context after processing a character.
+
+    Args:
+        context: Current decoding context.
+        char: Character being processed.
+        allowed_names: Function names available for generation.
+        function_definitions: Available function definitions.
+
+    Returns:
+        The updated decoder context.
+    """
     new_state = next_state(context.state, char, context, allowed_names)
     context.state = new_state
     if new_state == DecoderState.KEY_TEXT:
@@ -337,11 +402,14 @@ def update_context(
         context.parameter_value_buffer += char
     if new_state == DecoderState.PARAMETER_NUMBER_VALUE:
         context.parameter_value_buffer += char
+    if new_state == DecoderState.PARAMETER_BOOLEAN_VALUE:
+        context.parameter_value_buffer += char
     if new_state == DecoderState.PARAMETER_COMMA:
         context.used_parameter_names.append(context.parameter_name_buffer)
         context.parameter_name_buffer = ""
         context.parameter_value_buffer = ""
         context.current_parameter_type = ""
     if new_state == DecoderState.PARAMETER_COMPLETE:
-        context.used_parameter_names.append(context.parameter_name_buffer)
+        if len(context.parameter_name_buffer) > 0:
+            context.used_parameter_names.append(context.parameter_name_buffer)
     return context
