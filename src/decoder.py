@@ -46,6 +46,7 @@ class DecoderContext(BaseModel):
     parameter_names: list[str] = []
     current_parameter_type: str = ""
     parameter_value_buffer: str = ""
+    used_parameter_names: list[str] = []
 
 
 def is_valid_prefix(candidate: str, target: str) -> bool:
@@ -207,25 +208,32 @@ def next_state(
         return DecoderState.PARAMETER_KEY_OPEN
     elif current_state == DecoderState.PARAMETER_KEY_OPEN:
         candidate = context.parameter_name_buffer + char
-        status = check_candidates(candidate, context.parameter_names)
+        available_parameter_names = [
+            name
+            for name in context.parameter_names
+            if name not in context.used_parameter_names
+        ]
+        status = check_candidates(candidate, available_parameter_names)
         if status == CandidateStatus.INVALID:
             return DecoderState.INVALID
         return DecoderState.PARAMETER_NAME
     elif current_state == DecoderState.PARAMETER_NAME:
+        available_parameter_names = [
+                    name
+                    for name in context.parameter_names
+                    if name not in context.used_parameter_names
+                ]
         if (
             char == '"'
             and check_candidates(
                 context.parameter_name_buffer,
-                context.parameter_names
+                available_parameter_names
             ) == CandidateStatus.VALID_COMPLETE
         ):
             return DecoderState.PARAMETER_KEY_CLOSE
 
         candidate = context.parameter_name_buffer + char
-        status = check_candidates(
-            candidate,
-            context.parameter_names
-        )
+        status = check_candidates(candidate, available_parameter_names)
 
         if status != CandidateStatus.INVALID:
             return DecoderState.PARAMETER_NAME
@@ -250,8 +258,13 @@ def next_state(
     elif current_state == DecoderState.PARAMETER_STRING_VALUE and char == '"':
         return DecoderState.PARAMETER_VALUE_CLOSE
     elif current_state == DecoderState.PARAMETER_NUMBER_VALUE:
-        if char in '0123456789':
+        if (
+            char in '0123456789' and
+            context.parameter_value_buffer not in ("0", "-0")
+        ):
             return DecoderState.PARAMETER_NUMBER_VALUE
+        elif context.parameter_value_buffer == "-" and char == ".":
+            return DecoderState.INVALID
         elif char == "." and "." not in context.parameter_value_buffer:
             return DecoderState.PARAMETER_NUMBER_VALUE
         elif char == ",":
@@ -260,12 +273,26 @@ def next_state(
             return DecoderState.INVALID
         elif char == "}":
             if is_a_valid_number(context.parameter_value_buffer):
+                completed_parameter_names = (
+                    context.used_parameter_names
+                    + [context.parameter_name_buffer]
+                )
+                for name in context.parameter_names:
+                    if name not in completed_parameter_names:
+                        return DecoderState.INVALID
                 return DecoderState.PARAMETER_COMPLETE
             return DecoderState.INVALID
     elif current_state == DecoderState.PARAMETER_VALUE_CLOSE:
         if char == ',':
             return DecoderState.PARAMETER_COMMA
         elif char == '}':
+            completed_parameter_names = (
+                                context.used_parameter_names
+                                + [context.parameter_name_buffer]
+                            )
+            for name in context.parameter_names:
+                if name not in completed_parameter_names:
+                    return DecoderState.INVALID
             return DecoderState.PARAMETER_COMPLETE
     elif current_state == DecoderState.PARAMETER_COMMA and char == '"':
         return DecoderState.PARAMETER_KEY_OPEN
@@ -311,8 +338,10 @@ def update_context(
     if new_state == DecoderState.PARAMETER_NUMBER_VALUE:
         context.parameter_value_buffer += char
     if new_state == DecoderState.PARAMETER_COMMA:
+        context.used_parameter_names.append(context.parameter_name_buffer)
         context.parameter_name_buffer = ""
         context.parameter_value_buffer = ""
         context.current_parameter_type = ""
-    
+    if new_state == DecoderState.PARAMETER_COMPLETE:
+        context.used_parameter_names.append(context.parameter_name_buffer)
     return context
