@@ -30,6 +30,8 @@ class DecoderState(Enum):
     PARAMETER_COLON = "parameter_colon"
     PARAMETER_VALUE_OPEN = "parameter_value_open"
     PARAMETER_STRING_VALUE = "parameter_string_value"
+    PARAMETER_STRING_ESCAPE = "parameter_string_escape"
+    PARAMETER_STRING_UNICODE = "parameter_string_unicode"
     PARAMETER_NUMBER_VALUE = "parameter_number_value"
     PARAMETER_BOOLEAN_VALUE = "parameter_boolean_value"
     PARAMETER_VALUE_CLOSE = "parameter_value_close"
@@ -50,6 +52,7 @@ class DecoderContext(BaseModel):
     current_parameter_type: str = ""
     parameter_value_buffer: str = ""
     used_parameter_names: list[str] = []
+    unicode_escape_buffer: str = ""
 
 
 def is_valid_prefix(candidate: str, target: str) -> bool:
@@ -138,6 +141,19 @@ def get_function_parameters(
     function_name: str,
     function_definitions: list[FunctionDefinition]
 ) -> dict[str, ParameterDefinition]:
+    """
+    Get the parameter definitions for a function.
+
+    Args:
+        function_name: Name of the function to search for.
+        function_definitions: Available function definitions.
+
+    Returns:
+        The parameter definitions of the selected function.
+
+    Raises:
+        ValueError: If the function is not found.
+    """
     for each in function_definitions:
         if each.name == function_name:
             return each.parameters
@@ -260,6 +276,8 @@ def next_state(
     elif current_state == DecoderState.PARAMETER_COLON and char == '"':
         if context.current_parameter_type == "string":
             return DecoderState.PARAMETER_VALUE_OPEN
+    # Scientific notation is not supported; valid JSON numbers using
+    # exponent notation (e.g. 1e3) will be rejected by the decoder.
     elif (
         current_state == DecoderState.PARAMETER_COLON and
         char in '-0123456789'
@@ -273,15 +291,29 @@ def next_state(
     ):
         return DecoderState.PARAMETER_BOOLEAN_VALUE
     elif current_state == DecoderState.PARAMETER_VALUE_OPEN:
+        if char == "\\":
+            return DecoderState.PARAMETER_STRING_ESCAPE
         if char != '"':
             return DecoderState.PARAMETER_STRING_VALUE
-        elif char == '"':
-            return DecoderState.PARAMETER_VALUE_CLOSE
-    # TODO: Handle escaped characters in JSON strings.
-    elif current_state == DecoderState.PARAMETER_STRING_VALUE and char != '"':
-        return DecoderState.PARAMETER_STRING_VALUE
-    elif current_state == DecoderState.PARAMETER_STRING_VALUE and char == '"':
         return DecoderState.PARAMETER_VALUE_CLOSE
+    elif current_state == DecoderState.PARAMETER_STRING_VALUE:
+        if char == "\\":
+            return DecoderState.PARAMETER_STRING_ESCAPE
+        if char == '"':
+            return DecoderState.PARAMETER_VALUE_CLOSE
+        return DecoderState.PARAMETER_STRING_VALUE
+    elif current_state == DecoderState.PARAMETER_STRING_ESCAPE:
+        if char == "u":
+            return DecoderState.PARAMETER_STRING_UNICODE
+        if char in '"\\/bfnrt':
+            return DecoderState.PARAMETER_STRING_VALUE
+        return DecoderState.INVALID
+    elif current_state == DecoderState.PARAMETER_STRING_UNICODE:
+        if char not in "0123456789abcdefABCDEF":
+            return DecoderState.INVALID
+        if len(context.unicode_escape_buffer) == 3:
+            return DecoderState.PARAMETER_STRING_VALUE
+        return DecoderState.PARAMETER_STRING_UNICODE
     elif current_state == DecoderState.PARAMETER_NUMBER_VALUE:
         if (
             char in '0123456789' and
@@ -372,6 +404,7 @@ def update_context(
     Returns:
         The updated decoder context.
     """
+    previous_state = context.state
     new_state = next_state(context.state, char, context, allowed_names)
     context.state = new_state
     if new_state == DecoderState.KEY_TEXT:
@@ -398,17 +431,42 @@ def update_context(
         context.current_parameter_type = (
             parameters[context.parameter_name_buffer].type
         )
-    if new_state == DecoderState.PARAMETER_STRING_VALUE:
-        context.parameter_value_buffer += char
     if new_state == DecoderState.PARAMETER_NUMBER_VALUE:
         context.parameter_value_buffer += char
+
     if new_state == DecoderState.PARAMETER_BOOLEAN_VALUE:
+        context.parameter_value_buffer += char
+
+    if new_state == DecoderState.PARAMETER_STRING_ESCAPE:
+        context.parameter_value_buffer += char
+
+    if (
+        previous_state == DecoderState.PARAMETER_STRING_ESCAPE
+        and new_state == DecoderState.PARAMETER_STRING_UNICODE
+    ):
+        # The "u" starts a Unicode escape but is not one of its four hex digits.
+        context.parameter_value_buffer += char
+
+    elif new_state == DecoderState.PARAMETER_STRING_UNICODE:
+        context.unicode_escape_buffer += char
+        context.parameter_value_buffer += char
+
+    elif (
+        previous_state == DecoderState.PARAMETER_STRING_UNICODE
+        and new_state == DecoderState.PARAMETER_STRING_VALUE
+    ):
+        # Store the fourth hexadecimal digit and finish the Unicode escape.
+        context.parameter_value_buffer += char
+        context.unicode_escape_buffer = ""
+
+    elif new_state == DecoderState.PARAMETER_STRING_VALUE:
         context.parameter_value_buffer += char
     if new_state == DecoderState.PARAMETER_COMMA:
         context.used_parameter_names.append(context.parameter_name_buffer)
         context.parameter_name_buffer = ""
         context.parameter_value_buffer = ""
         context.current_parameter_type = ""
+
     if new_state == DecoderState.PARAMETER_COMPLETE:
         if len(context.parameter_name_buffer) > 0:
             context.used_parameter_names.append(context.parameter_name_buffer)
