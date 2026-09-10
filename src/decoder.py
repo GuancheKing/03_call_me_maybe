@@ -113,6 +113,36 @@ def is_a_valid_number(value: str) -> bool:
     return True
 
 
+def is_valid_token(
+    token_text: str,
+    context: DecoderContext,
+    allowed_names: list[str],
+    function_definitions: list[FunctionDefinition]
+) -> bool:
+    """
+    Check whether a token is valid from the current decoder state.
+
+    Args:
+        token_text: Decoded text of the token to validate.
+        context: Current decoding context.
+        allowed_names: Function names available for generation.
+        function_definitions: Available function definitions.
+
+    Returns:
+        True if the whole token can be processed without reaching
+        the INVALID state, otherwise False.
+    """
+    if not token_text:
+        return False
+    temp_context = context.model_copy(deep=True)
+    for char in token_text:
+        update_context(temp_context, char,
+                       allowed_names, function_definitions)
+        if temp_context.state == DecoderState.INVALID:
+            return False
+    return True
+
+
 def check_candidates(
         candidate: str, allowed_names: list[str]
         ) -> CandidateStatus:
@@ -161,6 +191,17 @@ def get_function_parameters(
         f"Function '{function_name}' was not found in"
         " the available definitions."
         )
+
+
+def can_start_token(
+    token_text: str,
+    context: DecoderContext
+) -> bool:
+    if not token_text:
+        return False
+    if context.state == DecoderState.START:
+        return token_text[0] == "{"
+    return True
 
 
 def next_state(
@@ -471,3 +512,44 @@ def update_context(
         if len(context.parameter_name_buffer) > 0:
             context.used_parameter_names.append(context.parameter_name_buffer)
     return context
+
+
+def mask_invalid_logits(
+        logits: list[float],
+        token_texts: list[str],
+        context: DecoderContext,
+        allowed_names: list[str],
+        function_definitions: list[FunctionDefinition]
+        ) -> list[float]:
+    """
+    Mask logits that correspond to invalid tokens.
+
+    Args:
+        logits: Scores assigned to each possible token.
+        token_texts: Decoded text associated with each token.
+        context: Current decoding context.
+        allowed_names: Function names available for generation.
+        function_definitions: Available function definitions.
+
+    Returns:
+        A copy of the logits with invalid token scores set to negative infinity.
+
+    Raises:
+        ValueError: If logits and token_texts have different lengths.
+    """
+    if len(logits) != len(token_texts):
+        raise ValueError(
+            "logits and token_texts must have the same length."
+            )
+    masked_logits = logits.copy()
+    for index in range(len(logits)):
+        if not can_start_token(token_texts[index], context):
+            masked_logits[index] = float("-inf")
+        elif not is_valid_token(
+                token_texts[index],
+                context,
+                allowed_names,
+                function_definitions
+        ):
+            masked_logits[index] = float("-inf")
+    return masked_logits

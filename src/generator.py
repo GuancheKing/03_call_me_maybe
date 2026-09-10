@@ -1,4 +1,5 @@
 from .models import FunctionDefinition
+from llm_sdk import Small_LLM_Model
 
 
 def format_function_definition(function: FunctionDefinition) -> str:
@@ -47,3 +48,20 @@ def build_llm_prompt(
     text += call_text
     text += "\nUser request:\n" + user_prompt
     return text
+
+
+def build_token_texts(model: Small_LLM_Model, vocab_size: int) -> list[str]:
+    """
+    Build a list that maps token IDs to their decoded text.
+
+    Args:
+        model: Language model used to decode token IDs.
+        vocab_size: Total number of token IDs to decode.
+
+    Returns:
+        A list where each index corresponds to a token ID and
+        contains the associated decoded text.
+    """
+    token_ids = [[token_id] for token_id in range(vocab_size)]
+    token_texts = model.decode(token_ids)
+    return token_texts
