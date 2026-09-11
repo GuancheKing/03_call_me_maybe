@@ -195,13 +195,215 @@ def get_function_parameters(
 
 def can_start_token(
     token_text: str,
-    context: DecoderContext
+    context: DecoderContext,
+    allowed_names: list[str]
 ) -> bool:
+    """
+    Check whether a token can potentially start from the current state.
+
+    This function performs a cheap check using only the first character
+    of the token. Full token validation is performed later by
+    is_valid_token().
+
+    Args:
+        token_text: Decoded text of the token to check.
+        context: Current decoding context.
+        allowed_names: Function names available for generation.
+
+    Returns:
+        True if the token may be valid from the current state,
+        otherwise False.
+    """
     if not token_text:
         return False
+
+    char = token_text[0]
+
     if context.state == DecoderState.START:
-        return token_text[0] == "{"
-    return True
+        return char == "{"
+
+    elif context.state == DecoderState.OBJECT_OPEN:
+        return char == '"'
+
+    elif context.state == DecoderState.KEY_OPEN:
+        return (
+            bool(context.expected_key)
+            and char == context.expected_key[0]
+        )
+
+    elif context.state == DecoderState.KEY_TEXT:
+        if context.key_buffer == context.expected_key:
+            return char == '"'
+
+        if len(context.key_buffer) < len(context.expected_key):
+            return char == context.expected_key[len(context.key_buffer)]
+
+        return False
+
+    elif context.state == DecoderState.KEY_CLOSE:
+        return char == ":"
+
+    elif context.state == DecoderState.COLON:
+        if context.expected_key == "name":
+            return char == '"'
+
+        if context.expected_key == "parameters":
+            return char == "{"
+
+        return False
+
+    elif context.state == DecoderState.VALUE_OPEN:
+        candidate = context.function_name_buffer + char
+
+        for name in allowed_names:
+            if name.startswith(candidate):
+                return True
+
+        return False
+
+    elif context.state == DecoderState.FUNCTION_NAME:
+        if (
+            char == '"'
+            and context.function_name_buffer in allowed_names
+        ):
+            return True
+
+        candidate = context.function_name_buffer + char
+
+        for name in allowed_names:
+            if name.startswith(candidate):
+                return True
+
+        return False
+
+    elif context.state == DecoderState.VALUE_CLOSE:
+        return char == ","
+
+    elif context.state == DecoderState.COMMA:
+        return char == '"'
+
+    elif context.state == DecoderState.PARAMETERS_OPEN:
+        if char == '"':
+            return True
+
+        if char == "}" and not context.parameter_names:
+            return True
+
+        return False
+
+    elif context.state == DecoderState.PARAMETER_KEY_OPEN:
+        candidate = context.parameter_name_buffer + char
+
+        for name in context.parameter_names:
+            if (
+                name not in context.used_parameter_names
+                and name.startswith(candidate)
+            ):
+                return True
+
+        return False
+
+    elif context.state == DecoderState.PARAMETER_NAME:
+        available_names = [
+            name
+            for name in context.parameter_names
+            if name not in context.used_parameter_names
+        ]
+
+        if (
+            char == '"'
+            and context.parameter_name_buffer in available_names
+        ):
+            return True
+
+        candidate = context.parameter_name_buffer + char
+
+        for name in available_names:
+            if name.startswith(candidate):
+                return True
+
+        return False
+
+    elif context.state == DecoderState.PARAMETER_KEY_CLOSE:
+        return char == ":"
+
+    elif context.state == DecoderState.PARAMETER_COLON:
+        if context.current_parameter_type == "string":
+            return char == '"'
+
+        if context.current_parameter_type == "number":
+            return char in "-0123456789"
+
+        if context.current_parameter_type == "boolean":
+            return char in ("t", "f")
+
+        return False
+
+    elif context.state == DecoderState.PARAMETER_VALUE_OPEN:
+        return True
+
+    elif context.state == DecoderState.PARAMETER_STRING_VALUE:
+        return True
+
+    elif context.state == DecoderState.PARAMETER_STRING_ESCAPE:
+        return char in '"\\/bfnrtu'
+
+    elif context.state == DecoderState.PARAMETER_STRING_UNICODE:
+        return char in "0123456789abcdefABCDEF"
+
+    elif context.state == DecoderState.PARAMETER_NUMBER_VALUE:
+        if (
+            char in "0123456789"
+            and context.parameter_value_buffer not in ("0", "-0")
+        ):
+            return True
+
+        if (
+            char == "."
+            and context.parameter_value_buffer != "-"
+            and "." not in context.parameter_value_buffer
+        ):
+            return True
+
+        if (
+            char in (",", "}")
+            and is_a_valid_number(context.parameter_value_buffer)
+        ):
+            return True
+
+        return False
+
+    elif context.state == DecoderState.PARAMETER_BOOLEAN_VALUE:
+        if (
+            context.parameter_value_buffer in ("true", "false")
+            and char in (",", "}")
+        ):
+            return True
+
+        candidate = context.parameter_value_buffer + char
+
+        return (
+            "true".startswith(candidate)
+            or "false".startswith(candidate)
+        )
+
+    elif context.state == DecoderState.PARAMETER_VALUE_CLOSE:
+        return char in (",", "}")
+
+    elif context.state == DecoderState.PARAMETER_COMMA:
+        return char == '"'
+
+    elif context.state == DecoderState.PARAMETER_COMPLETE:
+        return char == "}"
+
+    elif context.state in (
+        DecoderState.COMPLETE,
+        DecoderState.INVALID,
+        DecoderState.OBJECT_CLOSE,
+    ):
+        return False
+
+    return False
 
 
 def next_state(
@@ -517,6 +719,7 @@ def update_context(
 def mask_invalid_logits(
         logits: list[float],
         token_texts: list[str],
+        token_index: dict[str, list[int]],
         context: DecoderContext,
         allowed_names: list[str],
         function_definitions: list[FunctionDefinition]
@@ -527,12 +730,13 @@ def mask_invalid_logits(
     Args:
         logits: Scores assigned to each possible token.
         token_texts: Decoded text associated with each token.
+        token_index: Token IDs grouped by their first decoded character.
         context: Current decoding context.
         allowed_names: Function names available for generation.
         function_definitions: Available function definitions.
 
     Returns:
-        A copy of the logits with invalid token scores set to negative infinity.
+        A copy of the logits with invalid token scores set to negative inf.
 
     Raises:
         ValueError: If logits and token_texts have different lengths.
@@ -541,15 +745,159 @@ def mask_invalid_logits(
         raise ValueError(
             "logits and token_texts must have the same length."
             )
-    masked_logits = logits.copy()
-    for index in range(len(logits)):
-        if not can_start_token(token_texts[index], context):
-            masked_logits[index] = float("-inf")
-        elif not is_valid_token(
-                token_texts[index],
+    masked_logits = [float("-inf")] * len(logits)
+    allowed_start_chars = get_allowed_start_chars(
+        context, allowed_names, token_index)
+    for char in allowed_start_chars:
+        for token_id in token_index.get(char, []):
+            if is_valid_token(
+                token_texts[token_id],
                 context,
                 allowed_names,
                 function_definitions
-        ):
-            masked_logits[index] = float("-inf")
+            ):
+                masked_logits[token_id] = logits[token_id]
     return masked_logits
+
+
+def get_allowed_start_chars(
+        context: DecoderContext,
+        allowed_names: list[str],
+        token_index: dict[str, list[int]]
+        ) -> set[str]:
+    allowed = set()
+    if context.state == DecoderState.START:
+        allowed.add("{")
+    elif context.state == DecoderState.OBJECT_OPEN:
+        allowed.add('"')
+    elif context.state == DecoderState.KEY_CLOSE:
+        allowed.add(":")
+    elif context.state == DecoderState.VALUE_CLOSE:
+        allowed.add(",")
+    elif context.state == DecoderState.COMMA:
+        allowed.add('"')
+    elif context.state == DecoderState.PARAMETER_KEY_CLOSE:
+        allowed.add(":")
+    elif context.state == DecoderState.PARAMETER_COMMA:
+        allowed.add('"')
+    elif context.state == DecoderState.PARAMETER_COMPLETE:
+        allowed.add("}")
+    elif context.state == DecoderState.KEY_OPEN:
+        if context.expected_key:
+            allowed.add(context.expected_key[0])
+    elif context.state == DecoderState.KEY_TEXT:
+        if context.key_buffer == context.expected_key:
+            allowed.add('"')
+        elif len(context.key_buffer) < len(context.expected_key):
+            allowed.add(
+                context.expected_key[len(context.key_buffer)]
+            )
+    elif context.state == DecoderState.COLON:
+        if context.expected_key == "name":
+            allowed.add('"')
+        elif context.expected_key == "parameters":
+            allowed.add("{")
+    elif context.state == DecoderState.VALUE_OPEN:
+        for name in allowed_names:
+            if (
+                name.startswith(context.function_name_buffer)
+                and len(context.function_name_buffer) < len(name)
+            ):
+                allowed.add(
+                    name[len(context.function_name_buffer)]
+                )
+    elif context.state == DecoderState.FUNCTION_NAME:
+        if context.function_name_buffer in allowed_names:
+            allowed.add('"')
+        for name in allowed_names:
+            if (
+                name.startswith(context.function_name_buffer)
+                and len(context.function_name_buffer) < len(name)
+            ):
+                allowed.add(
+                    name[len(context.function_name_buffer)]
+                )
+    elif context.state == DecoderState.PARAMETERS_OPEN:
+        if not context.parameter_names:
+            allowed.add("}")
+        else:
+            allowed.add('"')
+    elif context.state == DecoderState.PARAMETER_KEY_OPEN:
+        available_names = [
+            name
+            for name in context.parameter_names
+            if name not in context.used_parameter_names
+        ]
+        for name in available_names:
+            if (
+                name.startswith(context.parameter_name_buffer)
+                and len(context.parameter_name_buffer) < len(name)
+            ):
+                allowed.add(
+                    name[len(context.parameter_name_buffer)]
+                )
+    elif context.state == DecoderState.PARAMETER_NAME:
+        available_names = [
+            name
+            for name in context.parameter_names
+            if name not in context.used_parameter_names
+        ]
+        if context.parameter_name_buffer in available_names:
+            allowed.add('"')
+        for name in available_names:
+            if (
+                name.startswith(context.parameter_name_buffer)
+                and len(context.parameter_name_buffer) < len(name)
+            ):
+                allowed.add(
+                    name[len(context.parameter_name_buffer)]
+                )
+    elif context.state == DecoderState.PARAMETER_COLON:
+        if context.current_parameter_type == "string":
+            allowed.add('"')
+        elif context.current_parameter_type == "number":
+            for char in "-0123456789":
+                allowed.add(char)
+        elif context.current_parameter_type == "boolean":
+            allowed.add("t")
+            allowed.add("f")
+    elif context.state == DecoderState.PARAMETER_VALUE_OPEN:
+        for char in token_index.keys():
+            allowed.add(char)
+    elif context.state == DecoderState.PARAMETER_STRING_VALUE:
+        for char in token_index.keys():
+            allowed.add(char)
+    elif context.state == DecoderState.PARAMETER_STRING_ESCAPE:
+        for char in '"\\/bfnrtu':
+            allowed.add(char)
+    elif context.state == DecoderState.PARAMETER_STRING_UNICODE:
+        for char in "0123456789abcdefABCDEF":
+            allowed.add(char)
+    elif context.state == DecoderState.PARAMETER_NUMBER_VALUE:
+        if context.parameter_value_buffer not in ("0", "-0"):
+            for char in "0123456789":
+                allowed.add(char)
+        if (
+            context.parameter_value_buffer != "-"
+            and "." not in context.parameter_value_buffer
+        ):
+            allowed.add(".")
+        if is_a_valid_number(context.parameter_value_buffer):
+            allowed.add(",")
+            allowed.add("}")
+    elif context.state == DecoderState.PARAMETER_BOOLEAN_VALUE:
+        if context.parameter_value_buffer in ("true", "false"):
+            allowed.add(",")
+            allowed.add("}")
+        for value in ("true", "false"):
+            if (
+                value.startswith(context.parameter_value_buffer)
+                and len(context.parameter_value_buffer) < len(value)
+            ):
+                allowed.add(
+                    value[len(context.parameter_value_buffer)]
+                )
+    elif context.state == DecoderState.PARAMETER_VALUE_CLOSE:
+        allowed.add(",")
+        allowed.add("}")
+    return allowed

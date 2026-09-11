@@ -1,4 +1,8 @@
 from .models import FunctionDefinition
+from .decoder import (
+    DecoderContext, mask_invalid_logits,
+    DecoderState, update_context
+    )
 from llm_sdk import Small_LLM_Model
 
 
@@ -65,3 +69,152 @@ def build_token_texts(model: Small_LLM_Model, vocab_size: int) -> list[str]:
     token_ids = [[token_id] for token_id in range(vocab_size)]
     token_texts = model.decode(token_ids)
     return token_texts
+
+
+def build_token_index(token_texts: list[str]) -> dict[str, list[int]]:
+    """
+    Build an index that groups token IDs by their first decoded character.
+
+    Args:
+        token_texts: Decoded text associated with each token ID.
+
+    Returns:
+        A dictionary where each key is the first character of a token
+        and each value is a list of token IDs starting with that character.
+    """
+    token_dict = {}
+    for token_id, token_text in enumerate(token_texts):
+        if not token_text:
+            continue
+        first_char = token_text[0]
+        if first_char not in token_dict:
+            token_dict[first_char] = [token_id]
+        else:
+            token_dict[first_char].append(token_id)
+    return token_dict
+
+
+def select_best_token(
+    masked_logits: list[float],
+    token_texts: list[str]
+) -> tuple[int, str]:
+    """
+    Select the token with the highest valid logit score.
+
+    Args:
+        masked_logits: Logit scores after invalid tokens have been masked.
+        token_texts: Decoded text associated with each token ID.
+
+    Returns:
+        A tuple containing the selected token ID and its decoded text.
+    """
+    if all(logit == float("-inf") for logit in masked_logits):
+        raise ValueError("No valid token available for generation.")
+    best_token_id = 0
+
+    for index in range(1, len(masked_logits)):
+        if masked_logits[index] > masked_logits[best_token_id]:
+            best_token_id = index
+
+    best_token_text = token_texts[best_token_id]
+    return best_token_id, best_token_text
+
+
+def generate_next_token(
+    model: Small_LLM_Model,
+    input_ids: list[int],
+    token_texts: list[str],
+    token_index: dict[str, list[int]],
+    context: DecoderContext,
+    allowed_names: list[str],
+    function_definitions: list[FunctionDefinition]
+) -> tuple[int, str]:
+    """
+    Generate the next valid token according to the decoder constraints.
+
+    Args:
+        model: Language model used to obtain token logits.
+        input_ids: Token IDs representing the current model input.
+        token_texts: Decoded text associated with each token ID.
+        token_index: Token IDs grouped by their first decoded character.
+        context: Current decoder context.
+        allowed_names: Function names available for generation.
+        function_definitions: Available function definitions.
+
+    Returns:
+        A tuple containing the selected token ID and its decoded text.
+    """
+    logits = model.get_logits_from_input_ids(input_ids)
+
+    masked_logits = mask_invalid_logits(
+        logits,
+        token_texts,
+        token_index,
+        context,
+        allowed_names,
+        function_definitions
+    )
+
+    best_token_id, best_token_text = select_best_token(
+        masked_logits, token_texts)
+
+    return best_token_id, best_token_text
+
+
+def generate_function_call(
+        model: Small_LLM_Model,
+        user_prompt: str,
+        function_definitions: list[FunctionDefinition],
+        limit: int
+        ) -> str:
+    """
+    Generate a valid function call using constrained token generation.
+
+    Args:
+        model: Language model used to generate the function call.
+        user_prompt: Natural-language request from the user.
+        function_definitions: Available function definitions that the model
+            can choose from.
+        limit: Maximum number of tokens allowed for generation.
+
+    Returns:
+        A generated function call as a JSON-formatted string.
+
+    Raises:
+        ValueError: If generation does not reach a complete valid output
+            before the token limit is reached.
+    """
+    llm_prompt = build_llm_prompt(
+        user_prompt,
+        function_definitions
+    )
+    input_ids = model.encode(llm_prompt)
+    input_ids = input_ids[0].tolist()
+    logits = model.get_logits_from_input_ids(input_ids)
+    token_texts = build_token_texts(
+            model,
+            len(logits)
+        )
+    token_index = build_token_index(token_texts)
+    context = DecoderContext(state=DecoderState.START)
+    allowed_names = [function.name for function in function_definitions]
+    text = ""
+    token_counter = 0
+    while context.state != DecoderState.COMPLETE and token_counter < limit:
+        next_token_id, next_token_text = generate_next_token(
+            model,
+            input_ids,
+            token_texts,
+            token_index,
+            context,
+            allowed_names,
+            function_definitions
+        )
+        input_ids.append(next_token_id)
+        text += next_token_text
+        token_counter += 1
+        for char in next_token_text:
+            update_context(context, char, allowed_names, function_definitions)
+    if context.state != DecoderState.COMPLETE:
+        raise ValueError(f"Couldn't complete with tokens limited to {limit}")
+    return text
