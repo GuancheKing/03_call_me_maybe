@@ -134,7 +134,18 @@ def is_valid_token(
     """
     if not token_text:
         return False
-    temp_context = context.model_copy(deep=True)
+    all_safe = True
+    safe_states = (
+        DecoderState.PARAMETER_VALUE_OPEN,
+        DecoderState.PARAMETER_STRING_VALUE)
+    if context.state in safe_states:
+        for char in token_text:
+            if char == '"' or char == "\\" or ord(char) < 0x20:
+                all_safe = False
+                break
+        if all_safe:
+            return True
+    temp_context = copy_decoder_context(context)
     for char in token_text:
         update_context(temp_context, char,
                        allowed_names, function_definitions)
@@ -534,12 +545,16 @@ def next_state(
     ):
         return DecoderState.PARAMETER_BOOLEAN_VALUE
     elif current_state == DecoderState.PARAMETER_VALUE_OPEN:
+        if ord(char) < 0x20:
+            return DecoderState.INVALID
         if char == "\\":
             return DecoderState.PARAMETER_STRING_ESCAPE
         if char != '"':
             return DecoderState.PARAMETER_STRING_VALUE
         return DecoderState.PARAMETER_VALUE_CLOSE
     elif current_state == DecoderState.PARAMETER_STRING_VALUE:
+        if ord(char) < 0x20:
+            return DecoderState.INVALID
         if char == "\\":
             return DecoderState.PARAMETER_STRING_ESCAPE
         if char == '"':
@@ -901,3 +916,31 @@ def get_allowed_start_chars(
         allowed.add(",")
         allowed.add("}")
     return allowed
+
+
+def copy_decoder_context(context: DecoderContext) -> DecoderContext:
+    """
+    Create an independent copy of a decoder context.
+
+    Mutable list fields are copied explicitly so changes made while
+    validating a candidate token do not affect the original context.
+
+    Args:
+        context: Decoder context to copy.
+
+    Returns:
+        A new DecoderContext with the same current values.
+    """
+    new_context = DecoderContext(
+        state=context.state,
+        expected_key=context.expected_key,
+        key_buffer=context.key_buffer,
+        function_name_buffer=context.function_name_buffer,
+        parameter_name_buffer=context.parameter_name_buffer,
+        parameter_names=context.parameter_names.copy(),
+        current_parameter_type=context.current_parameter_type,
+        parameter_value_buffer=context.parameter_value_buffer,
+        used_parameter_names=context.used_parameter_names.copy(),
+        unicode_escape_buffer=context.unicode_escape_buffer
+    )
+    return new_context
