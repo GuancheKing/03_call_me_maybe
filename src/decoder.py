@@ -626,13 +626,18 @@ def next_state(
         if status != CandidateStatus.INVALID:
             return DecoderState.PARAMETER_BOOLEAN_VALUE
     elif current_state == DecoderState.PARAMETER_VALUE_CLOSE:
+        completed_parameter_names = (
+            context.used_parameter_names
+            + [context.parameter_name_buffer]
+        )
+
         if char == ',':
-            return DecoderState.PARAMETER_COMMA
+            for name in context.parameter_names:
+                if name not in completed_parameter_names:
+                    return DecoderState.PARAMETER_COMMA
+            return DecoderState.INVALID
+
         elif char == '}':
-            completed_parameter_names = (
-                                context.used_parameter_names
-                                + [context.parameter_name_buffer]
-                            )
             for name in context.parameter_names:
                 if name not in completed_parameter_names:
                     return DecoderState.INVALID

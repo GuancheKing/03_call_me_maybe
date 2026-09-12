@@ -14,3 +14,9 @@ class FunctionDefinition(BaseModel):
 
 class PromptDefinition(BaseModel):
     prompt: str
+
+
+class FunctionCallResult(BaseModel):
+    prompt: str
+    name: str
+    parameters: dict[str, str | int | float | bool]

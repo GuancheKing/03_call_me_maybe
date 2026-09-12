@@ -1,5 +1,6 @@
-from .models import FunctionDefinition
-from .decoder import (
+import json
+from src.models import FunctionCallResult, FunctionDefinition
+from src.decoder import (
     DecoderContext, mask_invalid_logits,
     DecoderState, update_context
     )
@@ -20,7 +21,7 @@ def format_function_definition(function: FunctionDefinition) -> str:
     text = (
         f"\nName: {function.name}\n"
         f"Description: {function.description}\n"
-        f"Parameters: \n"
+        f"Parameters:\n"
     )
     for parameter_name, parameter_definition in function.parameters.items():
         text += f"- {parameter_name}: {parameter_definition.type}\n"
@@ -28,8 +29,8 @@ def format_function_definition(function: FunctionDefinition) -> str:
 
 
 def build_llm_prompt(
-        user_prompt: str,
-        function_definitions: list[FunctionDefinition]
+    user_prompt: str,
+    function_definitions: list[FunctionDefinition]
 ) -> str:
     """
     Build the full prompt sent to the LLM.
@@ -39,18 +40,17 @@ def build_llm_prompt(
         function_definitions: Available validated function definitions.
 
     Returns:
-        A prompt containing the available functions, the expected
-        output format, and the user's request.
+        A prompt containing the available functions, expected output
+        format, and user's request.
     """
-    text = ("Available functions:\n")
+    text = "Functions:\n"
+
     for function in function_definitions:
         text += format_function_definition(function)
-    call_text = (
-        "\nReturn a function call in JSON format with the following keys:\n"
-        "- name\n- parameters\n"
-        )
-    text += call_text
-    text += "\nUser request:\n" + user_prompt
+
+    text += '\nOutput JSON with keys "name" and "parameters".\n'
+    text += "Request: " + user_prompt
+
     return text
 
 
@@ -127,7 +127,8 @@ def generate_next_token(
     token_index: dict[str, list[int]],
     context: DecoderContext,
     allowed_names: list[str],
-    function_definitions: list[FunctionDefinition]
+    function_definitions: list[FunctionDefinition],
+    logits: list[float] | None = None
 ) -> tuple[int, str]:
     """
     Generate the next valid token according to the decoder constraints.
@@ -144,8 +145,8 @@ def generate_next_token(
     Returns:
         A tuple containing the selected token ID and its decoded text.
     """
-    logits = model.get_logits_from_input_ids(input_ids)
-
+    if logits is None:
+        logits = model.get_logits_from_input_ids(input_ids)
     masked_logits = mask_invalid_logits(
         logits,
         token_texts,
@@ -162,11 +163,14 @@ def generate_next_token(
 
 
 def generate_function_call(
-        model: Small_LLM_Model,
-        user_prompt: str,
-        function_definitions: list[FunctionDefinition],
-        limit: int
-        ) -> str:
+    model: Small_LLM_Model,
+    user_prompt: str,
+    function_definitions: list[FunctionDefinition],
+    limit: int,
+    token_texts: list[str],
+    token_index: dict[str, list[int]],
+    initial_logits: list[float] | None = None
+    ) -> FunctionCallResult:
     """
     Generate a valid function call using constrained token generation.
 
@@ -178,7 +182,8 @@ def generate_function_call(
         limit: Maximum number of tokens allowed for generation.
 
     Returns:
-        A generated function call as a JSON-formatted string.
+        A validated FunctionCallResult containing the original prompt,
+        selected function name, and generated parameters.
 
     Raises:
         ValueError: If generation does not reach a complete valid output
@@ -190,26 +195,43 @@ def generate_function_call(
     )
     input_ids = model.encode(llm_prompt)
     input_ids = input_ids[0].tolist()
-    logits = model.get_logits_from_input_ids(input_ids)
-    token_texts = build_token_texts(
-            model,
-            len(logits)
-        )
-    token_index = build_token_index(token_texts)
+    initial_token_count = len(input_ids)
     context = DecoderContext(state=DecoderState.START)
     allowed_names = [function.name for function in function_definitions]
     text = ""
     token_counter = 0
     while context.state != DecoderState.COMPLETE and token_counter < limit:
-        next_token_id, next_token_text = generate_next_token(
-            model,
-            input_ids,
-            token_texts,
-            token_index,
-            context,
-            allowed_names,
-            function_definitions
-        )
+        # next_token_id, next_token_text = generate_next_token(
+        #     model,
+        #     input_ids,
+        #     token_texts,
+        #     token_index,
+        #     context,
+        #     allowed_names,
+        #     function_definitions
+        # )
+        try:
+            next_token_id, next_token_text = generate_next_token(
+                model,
+                input_ids,
+                token_texts,
+                token_index,
+                context,
+                allowed_names,
+                function_definitions,
+                initial_logits if token_counter == 0 else None
+            )
+        except ValueError:
+            print("\n--- GENERATION FAILED ---")
+            print("Generated text:", repr(text))
+            print("State:", context.state)
+            print("Expected key:", context.expected_key)
+            print("Function buffer:", repr(context.function_name_buffer))
+            print("Parameter name:", repr(context.parameter_name_buffer))
+            print("Parameter type:", context.current_parameter_type)
+            print("Parameter value:", repr(context.parameter_value_buffer))
+            print("Used parameters:", context.used_parameter_names)
+            raise
         input_ids.append(next_token_id)
         text += next_token_text
         token_counter += 1
@@ -217,4 +239,30 @@ def generate_function_call(
             update_context(context, char, allowed_names, function_definitions)
     if context.state != DecoderState.COMPLETE:
         raise ValueError(f"Couldn't complete with tokens limited to {limit}")
-    return text
+    print("Input tokens:", initial_token_count)
+    print("Generated tokens:", token_counter)
+    return build_function_call_result(text, user_prompt)
+
+
+def build_function_call_result(
+    generated_json: str,
+    user_prompt: str
+) -> FunctionCallResult:
+    """
+    Build the final function call result from generated JSON.
+
+    Args:
+        generated_json: JSON string generated by the constrained decoder.
+        user_prompt: Original user prompt associated with the function call.
+
+    Returns:
+        A validated FunctionCallResult containing the prompt, function name,
+        and generated parameters.
+    """
+    parsed_json = json.loads(generated_json)
+    result = FunctionCallResult(
+        prompt=user_prompt,
+        name=parsed_json["name"],
+        parameters=parsed_json["parameters"]
+    )
+    return result
