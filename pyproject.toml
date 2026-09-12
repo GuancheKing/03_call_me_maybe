@@ -9,3 +9,11 @@ dependencies = [
 ]
 [tool.uv.sources]
 llm-sdk = { path = "./llm_sdk" }
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+
+[dependency-groups]
+dev = [
+    "mypy>=1.10",
+]

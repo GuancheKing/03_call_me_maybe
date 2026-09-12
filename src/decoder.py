@@ -707,7 +707,8 @@ def update_context(
         previous_state == DecoderState.PARAMETER_STRING_ESCAPE
         and new_state == DecoderState.PARAMETER_STRING_UNICODE
     ):
-        # The "u" starts a Unicode escape but is not one of its four hex digits.
+        # The "u" starts a Unicode escape but is not
+        # one of its four hex digits.
         context.parameter_value_buffer += char
 
     elif new_state == DecoderState.PARAMETER_STRING_UNICODE:

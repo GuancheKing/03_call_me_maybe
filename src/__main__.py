@@ -3,12 +3,12 @@ import json
 import time
 
 from src.parser import load_function_definitions, load_prompts
-from llm_sdk import Small_LLM_Model
+from llm_sdk import Small_LLM_Model  # type: ignore[attr-defined]
 from src.generator import (
     build_llm_prompt,
     build_token_index,
     build_token_texts,
-    generate_function_call,
+    generate_function_call_two_phase,
 )
 
 
@@ -83,14 +83,13 @@ start_time = time.perf_counter()
 for index, prompt in enumerate(prompts):
     print(f"\nGenerating: {prompt.prompt}")
     prompt_start = time.perf_counter()
-    function_call = generate_function_call(
+    function_call = generate_function_call_two_phase(
         model,
         prompt.prompt,
         function_definitions,
-        limit,
         token_texts,
         token_index,
-        sample_logits if index == 0 else None
+        limit
     )
     prompt_end = time.perf_counter()
     print(
