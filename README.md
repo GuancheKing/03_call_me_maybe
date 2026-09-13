@@ -43,6 +43,19 @@ uv sync
 
 On some 42 campus machines, the home directory may have very limited disk space.
 
+If `uv` is installed in `~/.local/bin` but `make` cannot find it, temporarily add that directory to the current shell `PATH`:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+You can verify that `uv` is available with:
+
+```bash
+which uv
+uv --version
+```
+
 If `uv sync`, `make install`, or model loading fails with an error similar to:
 
 ```text
@@ -104,23 +117,9 @@ The model files downloaded by Hugging Face will now be stored under:
 
 instead of the home directory.
 
-If `uv` is already installed in `~/.local/bin` but `make` cannot find it, temporarily add that directory to the current shell `PATH`:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-You can verify that `uv` is available with:
-
-```bash
-which uv
-uv --version
-```
-
 Then run:
 
 ```bash
-make install
 make run
 ```
 
