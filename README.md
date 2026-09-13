@@ -39,6 +39,96 @@ or directly with:
 uv sync
 ```
 
+### 42 Campus storage note
+
+On some 42 campus machines, the home directory may have very limited disk space.
+
+If `uv sync`, `make install`, or model loading fails with an error similar to:
+
+```text
+No space left on device
+```
+
+the `uv` cache, the project virtual environment, and the Hugging Face model cache can be stored in `sgoinfre` instead of the home directory.
+
+First, create the required directories:
+
+```bash
+mkdir -p /sgoinfre/students/$USER/uv-cache
+mkdir -p /sgoinfre/students/$USER/venvs/call_me_maybe
+mkdir -p /sgoinfre/students/$USER/huggingface
+```
+
+Configure `uv` and Hugging Face to use `sgoinfre`:
+
+```bash
+export UV_CACHE_DIR=/sgoinfre/students/$USER/uv-cache
+export HF_HOME=/sgoinfre/students/$USER/huggingface
+```
+
+If a previous installation attempt created a local `.venv`, remove it:
+
+```bash
+rm -rf .venv
+```
+
+Then create a symbolic link so that the project still sees a normal `.venv` directory while the actual virtual environment is stored in `sgoinfre`:
+
+```bash
+ln -s /sgoinfre/students/$USER/venvs/call_me_maybe .venv
+```
+
+Install the project dependencies normally:
+
+```bash
+make install
+```
+
+To verify that the virtual environment is correctly linked:
+
+```bash
+ls -ld .venv
+```
+
+It should point to a path similar to:
+
+```text
+.venv -> /sgoinfre/students/<login>/venvs/call_me_maybe
+```
+
+The model files downloaded by Hugging Face will now be stored under:
+
+```text
+/sgoinfre/students/<login>/huggingface
+```
+
+instead of the home directory.
+
+If `uv` is already installed in `~/.local/bin` but `make` cannot find it, temporarily add that directory to the current shell `PATH`:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+You can verify that `uv` is available with:
+
+```bash
+which uv
+uv --version
+```
+
+Then run:
+
+```bash
+make install
+make run
+```
+
+These environment variables only change where dependency caches and model files are stored. They do not modify the project behavior, source code, or repository contents.
+
+The `export` commands apply to the current shell session. If a new terminal session is opened, they may need to be set again.
+
+
 ### Running the program
 
 The program can be executed using the default input and output paths:
@@ -264,11 +354,16 @@ This reduces the number of candidate tokens that require full validation.
 
 ### Two-phase generation
 
-The two-phase architecture was chosen mainly for performance.
+The two-phase implementation was tested on a 42 campus machine using the full 11-prompt benchmark.
 
-Function selection requires information about all available functions, while parameter extraction only requires information about the selected function.
+The complete generation process took approximately 80 seconds in that environment.
 
-Separating these responsibilities reduces the prompt size during the longest part of generation.
+An earlier single-phase implementation required approximately 9 minutes for the same benchmark during development.
+
+The two-phase architecture therefore reduced generation time significantly while preserving high semantic accuracy.
+
+Execution time may still vary depending on the machine, available resources, and whether the model has already been downloaded and cached.
+
 
 ### No heuristic function selection
 

@@ -66,7 +66,7 @@ def main() -> None:
         output_path = Path(args.output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(output_path, "w") as file:
+        with open(output_path, "w", encoding="utf-8") as file:
             json.dump([], file, indent=4)
 
         print("No prompts to process.")
@@ -121,7 +121,7 @@ def main() -> None:
     results_json = json.dumps(results_dict, indent=4)
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w") as file:
+    with open(output_path, "w", encoding="utf-8") as file:
         file.write(results_json)
 
     end_time = time.perf_counter()
@@ -131,6 +131,7 @@ def main() -> None:
         round(end_time - start_time, 3),
         "seconds"
     )
+    print(f"Results written to {output_path}")
 
 
 if __name__ == "__main__":
