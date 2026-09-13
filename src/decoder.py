@@ -113,6 +113,52 @@ def is_a_valid_number(value: str) -> bool:
     return True
 
 
+def is_a_valid_integer(value: str) -> bool:
+    """
+    Check whether a string represents a valid JSON integer.
+
+    Args:
+        value: String representation of the integer to validate.
+
+    Returns:
+        True if the value is a valid integer, otherwise False.
+    """
+    if not value:
+        return False
+    start_index = 1 if value[0] == "-" else 0
+    if start_index == len(value):
+        return False
+    if value[start_index] == "0" and len(value[start_index:]) > 1:
+        return False
+    for char in value[start_index:]:
+        if char not in "0123456789":
+            return False
+    return True
+
+
+def is_a_valid_numeric_value(
+    value: str,
+    parameter_type: str
+) -> bool:
+    """
+    Validate a numeric value according to its declared parameter type.
+
+    Args:
+        value: Numeric value represented as text.
+        parameter_type: Declared schema type, either number or integer.
+
+    Returns:
+        True if the value matches the declared numeric type.
+    """
+    if parameter_type == "integer":
+        return is_a_valid_integer(value)
+
+    if parameter_type == "number":
+        return is_a_valid_number(value)
+
+    return False
+
+
 def is_valid_token(
     token_text: str,
     context: DecoderContext,
@@ -342,7 +388,7 @@ def can_start_token(
         if context.current_parameter_type == "string":
             return char == '"'
 
-        if context.current_parameter_type == "number":
+        if context.current_parameter_type in ("number", "integer"):
             return char in "-0123456789"
 
         if context.current_parameter_type == "boolean":
@@ -368,20 +414,21 @@ def can_start_token(
             and context.parameter_value_buffer not in ("0", "-0")
         ):
             return True
-
         if (
             char == "."
+            and context.current_parameter_type == "number"
             and context.parameter_value_buffer != "-"
             and "." not in context.parameter_value_buffer
         ):
             return True
-
         if (
             char in (",", "}")
-            and is_a_valid_number(context.parameter_value_buffer)
+            and is_a_valid_numeric_value(
+                context.parameter_value_buffer,
+                context.current_parameter_type
+            )
         ):
             return True
-
         return False
 
     elif context.state == DecoderState.PARAMETER_BOOLEAN_VALUE:
@@ -536,7 +583,7 @@ def next_state(
         current_state == DecoderState.PARAMETER_COLON and
         char in '-0123456789'
     ):
-        if context.current_parameter_type == "number":
+        if context.current_parameter_type in ("number", "integer"):
             return DecoderState.PARAMETER_NUMBER_VALUE
     elif (
         current_state == DecoderState.PARAMETER_COLON and
@@ -580,14 +627,24 @@ def next_state(
             return DecoderState.PARAMETER_NUMBER_VALUE
         elif context.parameter_value_buffer == "-" and char == ".":
             return DecoderState.INVALID
-        elif char == "." and "." not in context.parameter_value_buffer:
+        elif (
+            char == "."
+            and "." not in context.parameter_value_buffer
+            and context.current_parameter_type == "number"
+        ):
             return DecoderState.PARAMETER_NUMBER_VALUE
         elif char == ",":
-            if is_a_valid_number(context.parameter_value_buffer):
+            if is_a_valid_numeric_value(
+                context.parameter_value_buffer,
+                context.current_parameter_type
+            ):
                 return DecoderState.PARAMETER_COMMA
             return DecoderState.INVALID
         elif char == "}":
-            if is_a_valid_number(context.parameter_value_buffer):
+            if is_a_valid_numeric_value(
+                context.parameter_value_buffer,
+                context.current_parameter_type
+            ):
                 completed_parameter_names = (
                     context.used_parameter_names
                     + [context.parameter_name_buffer]
@@ -876,7 +933,7 @@ def get_allowed_start_chars(
     elif context.state == DecoderState.PARAMETER_COLON:
         if context.current_parameter_type == "string":
             allowed.add('"')
-        elif context.current_parameter_type == "number":
+        elif context.current_parameter_type in ("number", "integer"):
             for char in "-0123456789":
                 allowed.add(char)
         elif context.current_parameter_type == "boolean":
@@ -899,11 +956,15 @@ def get_allowed_start_chars(
             for char in "0123456789":
                 allowed.add(char)
         if (
-            context.parameter_value_buffer != "-"
+            context.current_parameter_type == "number"
+            and context.parameter_value_buffer != "-"
             and "." not in context.parameter_value_buffer
         ):
             allowed.add(".")
-        if is_a_valid_number(context.parameter_value_buffer):
+        if is_a_valid_numeric_value(
+            context.parameter_value_buffer,
+            context.current_parameter_type
+        ):
             allowed.add(",")
             allowed.add("}")
     elif context.state == DecoderState.PARAMETER_BOOLEAN_VALUE:

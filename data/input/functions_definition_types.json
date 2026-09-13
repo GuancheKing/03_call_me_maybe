@@ -1,0 +1,38 @@
+[
+    {
+        "name": "fn_store_number",
+        "description": "Store a numeric value.",
+        "parameters": {
+            "value": {
+                "type": "number"
+            }
+        },
+        "returns": {
+            "type": "number"
+        }
+    },
+    {
+        "name": "fn_store_text",
+        "description": "Store a text value.",
+        "parameters": {
+            "text": {
+                "type": "string"
+            }
+        },
+        "returns": {
+            "type": "string"
+        }
+    },
+    {
+        "name": "fn_set_flag",
+        "description": "Set a boolean flag to true or false.",
+        "parameters": {
+            "enabled": {
+                "type": "boolean"
+            }
+        },
+        "returns": {
+            "type": "boolean"
+        }
+    }
+]

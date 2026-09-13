@@ -1,0 +1,20 @@
+[
+    {
+        "prompt": "Store the number -12.5"
+    },
+    {
+        "prompt": "Store the number 123456789"
+    },
+    {
+        "prompt": "Store the text Hello, Pepo!"
+    },
+    {
+        "prompt": "Store the text Café ñandú"
+    },
+    {
+        "prompt": "Set the flag to true"
+    },
+    {
+        "prompt": "Set the flag to false"
+    }
+]
