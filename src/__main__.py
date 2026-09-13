@@ -57,6 +57,8 @@ def main() -> None:
     function_definitions = load_function_definitions(
         args.functions_definition
     )
+    if not function_definitions:
+        raise ValueError("No function definitions were provided.")
     prompts = load_prompts(
         args.input
     )
@@ -90,8 +92,10 @@ def main() -> None:
 
     results = []
     limit = args.limit
+    if args.limit <= 0:
+        raise ValueError("--limit must be greater than zero.")
     start_time = time.perf_counter()
-    for index, prompt in enumerate(prompts):
+    for prompt in prompts:
         print(f"\nGenerating: {prompt.prompt}")
         prompt_start = time.perf_counter()
         function_call = generate_function_call_two_phase(
@@ -133,5 +137,11 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\nYou are THAT kind of person, innit?\n"
-              "Execution interrupted by user.")
+        print(
+            "\nYou are THAT kind of person, innit?\n"
+            "Execution interrupted by user."
+        )
+        raise SystemExit(130)
+    except (OSError, ValueError) as error:
+        print(f"Error: {error}")
+        raise SystemExit(1)

@@ -1,9 +1,12 @@
 from .models import FunctionDefinition, PromptDefinition
 import json
-from pydantic import ValidationError, BaseModel
+from pydantic import BaseModel
 
 
-def warn_extra_fields(item: dict, model: type[BaseModel]) -> None:
+def warn_extra_fields(
+        item: dict[str, object],
+        model: type[BaseModel]
+        ) -> None:
     """
     Warn about unexpected fields that will be ignored.
 
@@ -36,34 +39,18 @@ def load_function_definitions(path: str) -> list[FunctionDefinition]:
         ValueError: If the JSON root is not a list or its elements
         are not objects.
     """
-    try:
-        with open(path, "r") as file:
-            data = json.load(file)
-            if not isinstance(data, list):
-                raise ValueError("The JSON root must be a list.")
-            validated_functions = []
-            for item in data:
-                if not isinstance(item, dict):
-                    raise ValueError("The JSON elements must be dictionaries.")
-                warn_extra_fields(item, FunctionDefinition)
-                function = FunctionDefinition(**item)
-                validated_functions.append(function)
-            return validated_functions
-    except FileNotFoundError as error:
-        print(f"Error: couldn't find the required json file in {path}")
-        print(error)
-        raise
-    except json.JSONDecodeError as error:
-        print("Error: the json file is not valid")
-        print(f"Line {error.lineno}, column {error.colno}: {error.msg}")
-        raise
-    except ValidationError as error:
-        print("Error: the JSON structure is not valid.")
-        print(error)
-        raise
-    except ValueError as error:
-        print(f"Error: {error}")
-        raise
+    with open(path, "r", encoding="utf-8") as file:
+        data = json.load(file)
+    if not isinstance(data, list):
+        raise ValueError("The JSON root must be a list.")
+    validated_functions = []
+    for item in data:
+        if not isinstance(item, dict):
+            raise ValueError("The JSON elements must be dictionaries.")
+        warn_extra_fields(item, FunctionDefinition)
+        function = FunctionDefinition(**item)
+        validated_functions.append(function)
+    return validated_functions
 
 
 def load_prompts(path: str) -> list[PromptDefinition]:
@@ -83,31 +70,15 @@ def load_prompts(path: str) -> list[PromptDefinition]:
         ValueError: If the JSON root is not a list or its elements
         are not objects.
     """
-    try:
-        with open(path, "r") as file:
-            data = json.load(file)
-            if not isinstance(data, list):
-                raise ValueError("The JSON root must be a list.")
-            validated_prompts = []
-            for item in data:
-                if not isinstance(item, dict):
-                    raise ValueError("The JSON elements must be dictionaries.")
-                warn_extra_fields(item, PromptDefinition)
-                prompt = PromptDefinition(**item)
-                validated_prompts.append(prompt)
-            return validated_prompts
-    except FileNotFoundError as error:
-        print(f"Error: couldn't find the required json file in {path}")
-        print(error)
-        raise
-    except json.JSONDecodeError as error:
-        print("Error: the json file is not valid")
-        print(f"Line {error.lineno}, column {error.colno}: {error.msg}")
-        raise
-    except ValidationError as error:
-        print("Error: the JSON structure is not valid.")
-        print(error)
-        raise
-    except ValueError as error:
-        print(f"Error: {error}")
-        raise
+    with open(path, "r", encoding="utf-8") as file:
+        data = json.load(file)
+    if not isinstance(data, list):
+        raise ValueError("The JSON root must be a list.")
+    validated_prompts = []
+    for item in data:
+        if not isinstance(item, dict):
+            raise ValueError("The JSON elements must be dictionaries.")
+        warn_extra_fields(item, PromptDefinition)
+        prompt = PromptDefinition(**item)
+        validated_prompts.append(prompt)
+    return validated_prompts
